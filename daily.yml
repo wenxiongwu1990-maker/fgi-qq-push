@@ -1,0 +1,47 @@
+name: FGI QQ Push
+on:
+  schedule:
+    # 工作日 19:00 北京时间（11:00 UTC）自动执行
+    - cron: '0 11 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch FGI and push to QQ group
+        env:
+          QMSG_KEY: ${{ secrets.QMSG_KEY }}
+          QMSG_GROUP: ${{ secrets.QMSG_GROUP }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, urllib.request, urllib.parse
+          req = urllib.request.Request("https://flyshub.github.io/FGI/data/fgi_latest.json",
+              headers={"User-Agent": "Mozilla/5.0"})
+          d = json.load(urllib.request.urlopen(req, timeout=30))
+          date = d.get("date", ""); fgi = d.get("fgi_final"); zone = d.get("zone", "")
+          health = d.get("health_score"); pct = d.get("percentile", 0)
+          dm = d.get("decision_matrix", {}); dims = d.get("dimensions", {})
+          lines = [f"📊 市场恐贪指数 · {date}", f"FGI: {fgi:.1f} ｜ 情绪: {zone}",
+                   f"健康度: {health:.0f}/100 ｜ 历史位置: {pct:.0f}%分位"]
+          if dm.get("quadrant"):
+              lines.append(f"🎯 决策: {dm['quadrant']}（情绪 {dm.get('sentiment_tier','')} · 估值 {dm.get('valuation_tier','')}）")
+          if dm.get("advice"):
+              lines.append(f"建议: {dm['advice']}")
+          parts = []
+          for k, label in (("momentum","动量"),("sentiment","情绪"),("valuation","估值"),("volatility","波动率"),("funding","杠杆")):
+              v = dims.get(k)
+              if v is not None:
+                  parts.append(f"{label} {v:.0f}")
+          if parts:
+              lines.append("📐 维度: " + " ｜ ".join(parts))
+          ex = d.get("extreme_signals", {})
+          if ex.get("high") or ex.get("low"):
+              lines.append(f"极端指标: {len(ex.get('high',[]))} 项偏高 ｜ {len(ex.get('low',[]))} 项偏低")
+          msg = "\n".join(lines)
+          payload = urllib.parse.urlencode({"msg": msg, "group": os.environ["QMSG_GROUP"]}).encode()
+          rq = urllib.request.Request("https://qmsg.zendee.cn/v3/send/" + os.environ["QMSG_KEY"],
+              data=payload, method="POST")
+          print(json.load(urllib.request.urlopen(rq, timeout=30)))
+          EOF
